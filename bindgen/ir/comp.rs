@@ -593,8 +593,10 @@ where
 
     for bitfield in raw_bitfields {
         let bitfield_width = bitfield.bitfield_width().unwrap() as usize;
-        let bitfield_layout =
-            ctx.resolve_type(bitfield.ty()).layout(ctx).ok_or(())?;
+        let bitfield_layout = ctx
+            .safe_resolve_type(bitfield.ty())
+            .and_then(|ty| ty.layout(ctx))
+            .ok_or(())?;
         let bitfield_size = bitfield_layout.size;
         let bitfield_align = bitfield_layout.align;
 
@@ -1172,8 +1174,11 @@ impl CompInfo {
             }
             CompFields::Before(ref raw_fields) => {
                 for field in raw_fields {
-                    let field_ty = ctx.resolve_type(field.0.ty);
-                    if let Some(layout) = field_ty.layout(ctx) {
+                    // libc++ template type-params can be pruned from the
+                    // item map while their user survives; treat a missing
+                    // item as an unknown layout instead of panicking.
+                    let field_ty = ctx.safe_resolve_type(field.0.ty);
+                    if let Some(layout) = field_ty.and_then(|ty| ty.layout(ctx)) {
                         callback(layout);
                     }
                 }

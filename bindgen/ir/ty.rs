@@ -207,6 +207,22 @@ impl Type {
 
     /// What is the layout of this type?
     pub(crate) fn layout(&self, ctx: &BindgenContext) -> Option<Layout> {
+        // Cycles in the item graph (dependent template types whose
+        // type-params were pruned) recurse forever through
+        // comp -> field -> alias -> comp. Cap the walk: past 64 levels no
+        // real C++ record nesting exists, so "unknown layout" is correct.
+        const MAX_LAYOUT_DEPTH: u32 = 64;
+        let depth = ctx.layout_depth.get();
+        if depth >= MAX_LAYOUT_DEPTH {
+            return None;
+        }
+        ctx.layout_depth.set(depth + 1);
+        let result = self.layout_inner(ctx);
+        ctx.layout_depth.set(depth);
+        result
+    }
+
+    fn layout_inner(&self, ctx: &BindgenContext) -> Option<Layout> {
         self.layout.or_else(|| {
             match self.kind {
                 TypeKind::Comp(ref ci) => ci.layout(ctx),
@@ -221,7 +237,9 @@ impl Type {
                     ctx.target_pointer_size(),
                 )),
                 TypeKind::ResolvedTypeRef(inner) => {
-                    ctx.resolve_type(inner).layout(ctx)
+                    // See comp.rs: template type-params may be pruned.
+                    ctx.safe_resolve_type(inner)
+                        .and_then(|ty| ty.layout(ctx))
                 }
                 _ => None,
             }
