@@ -389,6 +389,13 @@ pub(crate) struct BindgenContext {
     /// Whether an opaque array was generated
     generated_opaque_array: Cell<bool>,
 
+    /// Recursion depth of `Type::layout`/`CompInfo::layout` walks. Layouts of
+    /// dependent template types (libc++ `aligned_storage` and friends) form
+    /// cycles once their template type-params are pruned from the item map;
+    /// a depth cap turns what used to be a stack overflow into a plain
+    /// unknown-layout result.
+    pub(crate) layout_depth: Cell<u32>,
+
     /// Whether a bindgen complex was generated
     generated_bindgen_complex: Cell<bool>,
 
@@ -602,6 +609,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             codegen_items: None,
             used_template_parameters: None,
             need_bitfield_allocation: Default::default(),
+            layout_depth: Cell::new(0),
             enum_typedef_combos: None,
             cannot_derive_debug: None,
             cannot_derive_default: None,
@@ -1489,7 +1497,24 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         let item_id = item_id.into();
         match self.resolve_item_fallible(item_id) {
             Some(item) => item,
-            None => panic!("Not an item: {item_id:?}"),
+            None => {
+                let max = self.items.len().saturating_sub(1);
+                let mut neighbors = Vec::new();
+                for (i, slot) in self.items.iter().enumerate() {
+                    if i.saturating_sub(15) <= item_id.0 as usize && item_id.0 as usize <= i.saturating_add(15) {
+                        if let Some(v) = slot {
+                            let desc = match v.kind() {
+                                ItemKind::Type(ty) => format!("Type:name={:?} kind={:?}", ty.name(), std::mem::discriminant(ty.kind())),
+                                ItemKind::Function(f) => format!("Func:{}", f.name()),
+                                ItemKind::Module(m) => format!("Module:{:?}", m.name()),
+                                ItemKind::Var(v) => format!("Var:{}", v.name()),
+                            };
+                            neighbors.push(format!("{i}={desc}"));
+                        }
+                    }
+                }
+                panic!("Not an item: {item_id:?} (items 0..={max}, neighbors: {neighbors:?})");
+            }
         }
     }
 
